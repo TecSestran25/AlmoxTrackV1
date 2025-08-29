@@ -308,22 +308,34 @@ export type ImageObject = {
     contentType: string;
 };
 
-export const uploadImage = async (imageObject: ImageObject) => {
-    if (!imageObject || !imageObject.base64) {
-      return "https://placehold.co/40x40.png";
+export const uploadImage = async (imageObject: ImageObject): Promise<string> => {
+  if (!imageObject || !imageObject.base64) {
+    return "https://placehold.co/40x40.png"; // Retorna um placeholder se não houver imagem
+  }
+  try {
+    const response = await fetch('/api/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        base64: imageObject.base64,
+        fileName: imageObject.fileName,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || 'Falha no upload da imagem para o servidor.');
     }
-    try {
-      const { base64, fileName, contentType } = imageObject;
-      const storage = getStorage();
-      const storageRef = ref(storage, `products/${Date.now()}_${fileName}`);
-      const metadata = { contentType: contentType };
-      const snapshot = await uploadString(storageRef, base64, 'data_url', metadata);
-      const downloadURL = await getDownloadURL(snapshot.ref);
-      return downloadURL;
-    } catch (error) {
-      console.error("Erro ao fazer upload da imagem com Base64:", error);
-      throw error;
-    }
+
+    const { url } = await response.json();
+    return url;
+  } catch (error) {
+    console.error("Erro ao fazer upload da imagem via API:", error);
+    // Em caso de falha, você pode optar por retornar um placeholder ou lançar o erro
+    throw error;
+  }
 };
 
 export const generateNextItemCode = async (prefix: string): Promise<string> => {
@@ -627,7 +639,7 @@ export const rejectRequest = async (requestId: string, responsible: string, reas
       status: 'rejected',
       rejectedBy: responsible,
       rejectionDate: new Date().toISOString(),
-      rejectionReason: reason // <-- SALVANDO O MOTIVO
+      rejectionReason: reason
   });
 };
 
