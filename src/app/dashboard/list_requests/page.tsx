@@ -3,6 +3,7 @@
 import * as React from "react";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+// 1. Obter o secretariaId do contexto
 import { useAuth } from "@/contexts/AuthContext";
 import type { RequestData } from "@/lib/firestore";
 import { getRequestsForUser, deleteRequest } from "@/lib/firestore";
@@ -55,12 +56,13 @@ import { Button } from "@/components/ui/button";
 import { Trash2 } from "lucide-react";
 
 export default function MyRequestsPage() {
-  const { user } = useAuth();
+  // Obter user e secretariaId
+  const { user, secretariaId } = useAuth(); 
   const { toast } = useToast();
   const [requests, setRequests] = React.useState<RequestData[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
 
-  // Estados da Paginação
+  // ... (Estados de paginação e UI sem alterações)
   const [currentPage, setCurrentPage] = React.useState(1);
   const [pageCursors, setPageCursors] = React.useState<(DocumentSnapshot<DocumentData> | undefined)[]>([undefined]);
   const [hasNextPage, setHasNextPage] = React.useState(true);
@@ -68,10 +70,15 @@ export default function MyRequestsPage() {
   const PAGE_SIZE = 5;
 
   const fetchRequests = React.useCallback(async (page: number, cursor?: DocumentSnapshot<DocumentData>) => {
-    if (!user?.uid) return;
+    // 2. Guarda de segurança
+    if (!user?.uid || !secretariaId) {
+        setIsLoading(false);
+        return;
+    }
     setIsLoading(true);
     try {
-      const { requests: data, lastDoc } = await getRequestsForUser(user.uid, PAGE_SIZE, cursor);
+      // 3. Passar secretariaId para a função
+      const { requests: data, lastDoc } = await getRequestsForUser(secretariaId, user.uid, PAGE_SIZE, cursor);
       setRequests(data);
       setHasNextPage(data.length === PAGE_SIZE);
       if (lastDoc) {
@@ -81,18 +88,19 @@ export default function MyRequestsPage() {
           return newCursors;
         });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Erro ao buscar requisições:", error);
+      toast({ title: "Erro ao buscar requisições", description: error.message, variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
-  }, [user]);
+  // 4. Adicionar secretariaId como dependência
+  }, [user, secretariaId, toast]);
 
   React.useEffect(() => {
-    if (user?.uid) {
-      fetchRequests(1, undefined);
-    }
-  }, [user, fetchRequests]);
+    // A verificação agora está dentro de fetchRequests
+    fetchRequests(1, undefined);
+  }, [user, secretariaId, fetchRequests]); // Adicionado secretariaId
 
   const handleNextPage = () => {
     if (!hasNextPage) return;
@@ -111,14 +119,15 @@ export default function MyRequestsPage() {
   };
 
   const handleDeleteRequest = async (requestId: string) => {
-    if (!user?.uid) return;
+    // 2. Guarda de segurança
+    if (!user?.uid || !secretariaId) return;
     
-    setIsDeleting(requestId); // Ativa o loading para este item
+    setIsDeleting(requestId);
     try {
-        await deleteRequest(requestId, user.uid);
+        // 3. Passar secretariaId para a função
+        await deleteRequest(secretariaId, requestId, user.uid);
         toast({
             title: "Requisição Cancelada",
-            description: "Sua requisição foi cancelada com sucesso.",
             variant: "success"
         });
         // Recarrega os dados da página atual para remover o item da lista
@@ -126,11 +135,11 @@ export default function MyRequestsPage() {
     } catch (error: any) {
         toast({
             title: "Erro ao Cancelar",
-            description: error.message || "Não foi possível cancelar a requisição.",
+            description: error.message,
             variant: "destructive"
         });
     } finally {
-        setIsDeleting(null); // Desativa o loading
+        setIsDeleting(null);
     }
   };
 

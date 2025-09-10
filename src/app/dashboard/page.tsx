@@ -51,11 +51,13 @@ import { getAllProducts, getMovements } from "@/lib/firestore";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { startOfMonth, endOfMonth, subMonths } from "date-fns";
+import { useAuth } from "@/contexts/AuthContext"; // 1. Importar useAuth
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
 
 export default function DashboardPage() {
+  const { secretariaId } = useAuth();
   const [products, setProducts] = React.useState<Product[]>([]);
   const [movements, setMovements] = React.useState<Movement[]>([]);
   const [allDepartments, setAllDepartments] = React.useState<string[]>([]);
@@ -97,22 +99,27 @@ export default function DashboardPage() {
   }, [toast]);
 
   const fetchDashboardData = React.useCallback(async () => {
-    if (!startDate || !endDate) return;
+    // 3. Guarda de segurança
+    if (!startDate || !endDate || !secretariaId) {
+        setIsLoading(false);
+        return;
+    }
 
     setIsLoading(true);
     try {
-      const productsData = await getAllProducts();
+      // 4. Passar secretariaId para todas as buscas de dados
+      const productsData = await getAllProducts(secretariaId);
       setProducts(productsData);
 
       const [movementsData, allMovementsForDepartments] = await Promise.all([
-        getMovements({
+        getMovements(secretariaId, {
           startDate: startDate.toISOString(),
           endDate: endDate.toISOString(),
           movementType: movementType !== "all" ? movementType : undefined,
           materialType: materialType !== "all" ? materialType : undefined,
           department: department !== "all" ? department : undefined,
         }),
-        getMovements() 
+        getMovements(secretariaId) // Busca todos os movimentos da secretaria para popular o filtro de departamentos
       ]);
       
       setMovements(movementsData);
@@ -121,16 +128,17 @@ export default function DashboardPage() {
       setAllDepartments(uniqueDeps);
       checkExpirationAlerts(productsData);
 
-    } catch (error) {
+    } catch (error: any) {
       toast({
         title: "Erro ao Carregar Dados",
-        description: "Não foi possível buscar os dados do dashboard.",
+        description: error.message || "Não foi possível buscar os dados do dashboard.",
         variant: "destructive",
       });
     } finally {
       setIsLoading(false);
     }
-  }, [startDate, endDate, movementType, materialType, department, toast, checkExpirationAlerts]);
+  // 5. Adicionar secretariaId como dependência
+  }, [startDate, endDate, movementType, materialType, department, toast, checkExpirationAlerts, secretariaId]);
 
   React.useEffect(() => {
     fetchDashboardData();
@@ -210,31 +218,38 @@ export default function DashboardPage() {
   }, [movements, products]);
 
   const handleExportCSV = async () => {
-    toast({ title: "Gerando relatório...", description: "Aguarde enquanto preparamos o seu ficheiro." });
+    // 3. Guarda de segurança
+    if (!secretariaId) {
+        toast({ title: "Erro de autenticação", variant: "destructive" });
+        return;
+    }
+    toast({ title: "Gerando relatório..." });
 
     try {
         const today = new Date();
         const lastMonth = subMonths(today, 1);
-        const startDate = startOfMonth(lastMonth).toISOString();
-        const endDate = endOfMonth(lastMonth).toISOString();
+        const startDateFilter = startOfMonth(lastMonth).toISOString();
+        const endDateFilter = endOfMonth(lastMonth).toISOString();
 
-        const movementsToExport = await getMovements({ startDate, endDate });
+        // 4. Passar secretariaId
+        const movementsToExport = await getMovements(secretariaId, { startDate: startDateFilter, endDate: endDateFilter });
 
         if (movementsToExport.length === 0) {
-            toast({ title: "Nenhum dado encontrado", description: "Não há movimentações registadas no mês passado para exportar.", variant: "destructive" });
+            toast({ title: "Nenhum dado encontrado", variant: "destructive" });
             return;
         }
 
-        const productsSnapshot = await getDocs(collection(db, "products"));
-        const productsData = productsSnapshot.docs.reduce((acc, doc) => {
-            acc[doc.id] = doc.data();
+        // 4. Passar secretariaId
+        const allProducts = await getAllProducts(secretariaId);
+        const productsMap = allProducts.reduce((acc, doc) => {
+            acc[doc.id] = doc;
             return acc;
-        }, {} as { [id: string]: any });
+        }, {} as { [id: string]: Product });
         
         const csvData = movementsToExport.map(m => ({
             Data: format(parseISO(m.date), "dd/MM/yyyy HH:mm"),
-            Item: productsData[m.productId]?.name || 'Item não encontrado',
-            Codigo: productsData[m.productId]?.code || 'N/A',
+            Item: productsMap[m.productId]?.name || 'Item não encontrado',
+            Codigo: productsMap[m.productId]?.code || 'N/A',
             TipoMovimento: m.type,
             TipoEntrada: m.entryType || 'N/A',
             Quantidade: m.quantity,

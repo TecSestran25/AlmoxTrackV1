@@ -1,11 +1,11 @@
-"use client";
-
 import * as React from "react";
 import { format, parseISO, differenceInMonths } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { cn } from "@/lib/utils";
-import type { Movement } from "@/lib/firestore";
+import type { Movement, Product } from "@/lib/firestore"; // Import Product type
 import { getMovementsForItem } from "@/lib/firestore";
+import { useAuth } from "@/contexts/AuthContext"; // 1. Importar useAuth
+import { useToast } from "@/hooks/use-toast";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -79,36 +79,47 @@ const getTableRowClass = (status: 'alert' | 'warning' | 'reminder' | null, movem
 interface MovementsSheetProps {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
-  item: any; 
+  item: Product | null; // Tipagem corrigida para Product | null
 }
 
 const extractRequesterInfo = (requesterString: string) => {
-  const match = requesterString.match(/(.*)\s\((.*)\)/);
-  if (match) {
-    return { name: match[1], id: match[2] };
-  }
-  return { name: requesterString, id: '' };
+  if (!requesterString) return { name: '', id: '' };
+  const match = requesterString.match(/(.*)\s\((.*)\)/);
+  if (match) {
+    return { name: match[1], id: match[2] };
+  }
+  return { name: requesterString, id: '' };
 };
 
 export function MovementsSheet({ isOpen, onOpenChange, item }: MovementsSheetProps) {
   const [itemMovements, setItemMovements] = React.useState<Movement[]>([]);
   const [isLoading, setIsLoading] = React.useState(false);
+  const { toast } = useToast();
+  // 1. Obter o secretariaId do contexto
+  const { secretariaId } = useAuth(); 
 
   React.useEffect(() => {
-    if (isOpen && item) {
-      const fetchMovements = async () => {
+    const fetchMovements = async () => {
+      // 2. Guarda de segurança
+      if (isOpen && item && secretariaId) { 
         setIsLoading(true);
-        const movements = await getMovementsForItem(item.id);
-
-        const sortedMovements = movements.sort((a, b) => 
-            parseISO(b.date).getTime() - parseISO(a.date).getTime()
-        );
-        setItemMovements(sortedMovements);
-        setIsLoading(false);
-      };
-      fetchMovements();
-    }
-  }, [isOpen, item]);
+        try {
+            // 3. Passar o secretariaId para a função
+            const movements = await getMovementsForItem(secretariaId, item.id);
+            const sortedMovements = movements.sort((a, b) => 
+                parseISO(b.date).getTime() - parseISO(a.date).getTime()
+            );
+            setItemMovements(sortedMovements);
+        } catch (error: any) {
+            toast({ title: "Erro ao buscar histórico", description: error.message, variant: "destructive"});
+        } finally {
+            setIsLoading(false);
+        }
+      }
+    };
+    fetchMovements();
+  // 4. Adicionar secretariaId como dependência
+  }, [isOpen, item, secretariaId, toast]);
 
   const processedMovements = React.useMemo(() => {
     if (itemMovements.length === 0) return [];

@@ -1,10 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { format } from "date-fns";
-import { ptBR } from "date-fns/locale";
 import { Trash2 } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -32,21 +29,19 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { ItemSearch } from "../../dashboard/components/item-search";
-import type { Product } from "@/lib/firestore";
-import { createRequest, RequestItem } from "@/lib/firestore";
-import { useAuth } from "@/contexts/AuthContext";
+import type { Product, RequestItem } from "@/lib/firestore";
+import { createRequest } from "@/lib/firestore";
+import { useAuth, AppUser } from "@/contexts/AuthContext"; // Importar AppUser
 
 export default function ItemRequestForm() {
     const { toast } = useToast();
-    const { user } = useAuth();
+    // 1. Obter o secretariaId do contexto
+    const { user, secretariaId } = useAuth();
 
-    const userName = user?.name || '';
-    const userUid = user?.uid || '';
-    const userDepartment = user?.department || '';
-
-    const [requesterName, setRequesterName] = React.useState(userName);
-    const [requesterId, setRequesterId] = React.useState(userUid);
-    const [department, setDepartment] = React.useState(userDepartment);
+    // Estados do formulário
+    const [requesterName, setRequesterName] = React.useState("");
+    const [requesterId, setRequesterId] = React.useState("");
+    const [department, setDepartment] = React.useState("");
     const [purpose, setPurpose] = React.useState("");
     const [quantity, setQuantity] = React.useState(1);
     const [requestedItems, setRequestedItems] = React.useState<RequestItem[]>([]);
@@ -54,51 +49,52 @@ export default function ItemRequestForm() {
     const [isSubmitting, setIsSubmitting] = React.useState(false);
 
     React.useEffect(() => {
+        // Popula os dados do usuário quando o contexto é carregado
         if (user) {
             setRequesterName(user.name || "");
-            setRequesterId(user.id || "");
+            // CORREÇÃO: Acessar 'id' (matrícula) de forma segura
+            setRequesterId((user as AppUser).id || ""); 
             setDepartment(user.department || "");
         }
     }, [user]);
 
     const handleAddItem = () => {
-        if (!selectedItem || !selectedItem.id) {
-            toast({
-                title: "Nenhum item selecionado",
-                description: "Por favor, busque e selecione um item válido da lista.",
-                variant: "destructive",
-            });
+        // 2. Guarda de segurança para o secretariaId
+        if (!secretariaId) {
+            toast({ title: "Erro de autenticação", description: "Secretaria não identificada.", variant: "destructive" });
             return;
         }
-        
+        if (!selectedItem || !selectedItem.id) {
+            toast({ title: "Nenhum item selecionado", variant: "destructive" });
+            return;
+        }
         if (quantity <= 0) {
-            toast({ title: "Quantidade inválida", description: "A quantidade deve ser maior que zero.", variant: "destructive" });
+            toast({ title: "Quantidade inválida", variant: "destructive" });
             return;
         }
 
-        if (selectedItem.quantity < quantity) {
-            toast({ title: "Estoque insuficiente", description: `A quantidade solicitada (${quantity}) é maior que a disponível (${selectedItem.quantity}).`, variant: "destructive" });
+        const existingItem = requestedItems.find((i) => i.id === selectedItem.id);
+        const currentRequestedQty = existingItem ? existingItem.quantity : 0;
+        
+        if (selectedItem.quantity < currentRequestedQty + quantity) {
+            toast({ title: "Estoque insuficiente", description: `A quantidade total solicitada (${currentRequestedQty + quantity}) é maior que a disponível (${selectedItem.quantity}).`, variant: "destructive" });
             return;
         }
 
         setRequestedItems((prev) => {
-            const existing = prev.find((i) => i.id === selectedItem.id);
-            if (existing) {
-                const newQuantity = existing.quantity + quantity;
-                if (selectedItem.quantity < newQuantity) {
-                    toast({ title: "Estoque insuficiente", description: `A quantidade total solicitada (${newQuantity}) é maior que a disponível (${selectedItem.quantity}).`, variant: "destructive" });
-                    return prev;
-                }
-                return prev.map((i) => i.id === selectedItem.id ? { ...i, quantity: newQuantity } : i);
+            if (existingItem) {
+                return prev.map((i) => i.id === selectedItem.id ? { ...i, quantity: i.quantity + quantity } : i);
             }
+            // CORREÇÃO: Adicionar secretariaId ao novo item
             const newItem: RequestItem = {
                 id: selectedItem.id,
+                secretariaId: secretariaId, // Adicionado
                 name: selectedItem.name,
                 quantity,
                 unit: selectedItem.unit,
                 isPerishable: selectedItem.isPerishable || 'Não',
                 expirationDate: selectedItem.expirationDate || '',
-                type: ""
+                type: selectedItem.type,
             };
             
             return [...prev, newItem];
@@ -113,13 +109,16 @@ export default function ItemRequestForm() {
     };
 
     const handleSubmitRequest = async () => {
-        if (requestedItems.length === 0) {
-            toast({ title: "Nenhum item solicitado", description: "Adicione pelo menos um item para registrar a solicitação.", variant: "destructive" });
+        if (!user?.uid || !secretariaId) {
+            toast({ title: "Erro de Autenticação", variant: "destructive" });
             return;
         }
-
-        if (!requesterName || !requesterId || !department) {
-            toast({ title: "Campos obrigatórios", description: "Por favor, preencha o nome, matrícula e setor do solicitante.", variant: "destructive" });
+        if (requestedItems.length === 0) {
+            toast({ title: "Nenhum item solicitado", variant: "destructive" });
+            return;
+        }
+        if (!requesterName || !department) {
+            toast({ title: "Campos obrigatórios", variant: "destructive" });
             return;
         }
 
@@ -128,27 +127,27 @@ export default function ItemRequestForm() {
             const requestDataToSend = {
                 items: requestedItems,
                 date: new Date().toISOString(),
-                requester: `${requesterName} (${requesterId})`,
+                requester: requesterId ? `${requesterName} (${requesterId})` : requesterName,
                 department: department,
                 purpose: purpose || '',
-                requestedByUid: user?.uid || '',
+                requestedByUid: user.uid,
             };
 
-            await createRequest(requestDataToSend);
+            // 3. Passar o secretariaId para a função createRequest
+            await createRequest(secretariaId, requestDataToSend);
 
-            toast({ title: "Solicitação Enviada!", description: "Sua solicitação foi enviada para aprovação.", variant: "success" });
+            toast({ title: "Solicitação Enviada!", variant: "success" });
 
+            // Limpar formulário
             setRequestedItems([]);
             setPurpose("");
-            setRequesterName(userName);
-            setRequesterId(user?.id || '');
-            setDepartment(userDepartment);
+            if (user) {
+                setRequesterName(user.name || "");
+                setRequesterId((user as AppUser).id || "");
+                setDepartment(user.department || "");
+            }
         } catch (error: any) {
-            toast({
-                title: "Erro ao Enviar Solicitação",
-                description: error.message || "Não foi possível registrar a solicitação. Tente novamente.",
-                variant: "destructive"
-            });
+            toast({ title: "Erro ao Enviar Solicitação", description: error.message, variant: "destructive" });
         } finally {
             setIsSubmitting(false);
         }
@@ -161,15 +160,15 @@ export default function ItemRequestForm() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <div className="space-y-2">
                             <label htmlFor="requester-name" className="text-sm font-medium">Nome do Solicitante</label>
-                            <Input id="requester-name" value={requesterName} onChange={e => setRequesterName(e.target.value)} disabled={!!user} />
+                            <Input id="requester-name" value={requesterName} onChange={e => setRequesterName(e.target.value)} disabled={!!user?.name} />
                         </div>
                         <div className="space-y-2">
                             <label htmlFor="requester-id" className="text-sm font-medium">Matrícula do Solicitante</label>
-                            <Input id="requester-id" value={requesterId} onChange={e => setRequesterId(e.target.value)} disabled={!!user} />
+                            <Input id="requester-id" value={requesterId} onChange={e => setRequesterId(e.target.value)} disabled={!!user?.id} />
                         </div>
                         <div className="space-y-2">
                             <label htmlFor="department" className="text-sm font-medium">Setor/Departamento</label>
-                            <Select onValueChange={setDepartment} value={department} disabled={!!user}>
+                            <Select onValueChange={setDepartment} value={department} disabled={!!user?.department}>
                                 <SelectTrigger id="department">
                                     <SelectValue placeholder="Selecione um setor" />
                                 </SelectTrigger>

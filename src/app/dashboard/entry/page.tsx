@@ -6,41 +6,19 @@ import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Calendar } from "@/components/ui/calendar";
 import { AddItemSheet } from "../inventory/components/add-item-sheet";
 import { ItemSearch } from "../components/item-search";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import type { Product } from "@/lib/firestore";
-import { addProduct, finalizeEntry, uploadImage, addMovement, generateNextItemCode } from "@/lib/firestore";
-import { useAuth } from "@/contexts/AuthContext"; 
+import { addProduct, finalizeEntry, uploadImage, generateNextItemCode, searchProducts } from "@/lib/firestore";
+import { useAuth } from "@/contexts/AuthContext";
 
 type ReceivedItem = {
     id: string;
@@ -53,19 +31,32 @@ type ReceivedItem = {
 
 export default function EntryPage() {
     const { toast } = useToast();
+    const { user, secretariaId } = useAuth(); // Obtenha o secretariaId
+
+    // Estados do formulário
     const [entryDate, setEntryDate] = React.useState<Date | undefined>(new Date());
     const [supplier, setSupplier] = React.useState("");
     const [invoice, setInvoice] = React.useState("");
     const [responsible, setResponsible] = React.useState("");
-    const [quantity, setQuantity] = React.useState(1);
-    const [receivedItems, setReceivedItems] = React.useState<ReceivedItem[]>([]);
-    const [isAddItemSheetOpen, setIsAddItemSheetOpen] = React.useState(false);
-    const [isLoading, setIsLoading] = React.useState(false);
-    const [isFinalizing, setIsFinalizing] = React.useState(false);
-    const [selectedItemForAddition, setSelectedItemForAddition] = React.useState<Product | null>(null);
     const [entryType, setEntryType] = React.useState<'Oficial' | 'Não Oficial'>('Oficial');
+    
+    // Estados dos itens
+    const [receivedItems, setReceivedItems] = React.useState<ReceivedItem[]>([]);
+    const [selectedItemForAddition, setSelectedItemForAddition] = React.useState<Product | null>(null);
+    const [quantity, setQuantity] = React.useState(1);
     const [expirationDate, setExpirationDate] = React.useState<Date | undefined>(undefined);
-    const { user } = useAuth();
+    
+    // Estados de UI
+    const [isAddItemSheetOpen, setIsAddItemSheetOpen] = React.useState(false);
+    const [isFinalizing, setIsFinalizing] = React.useState(false);
+    const [isLoading, setIsLoading] = React.useState(false);
+
+    // Seta o nome do responsável automaticamente quando o usuário é carregado
+    React.useEffect(() => {
+        if (user?.name) {
+            setResponsible(user.name);
+        }
+    }, [user]);
 
     const handleSelectSearchItem = (item: Product) => {
         setSelectedItemForAddition(item);
@@ -77,29 +68,17 @@ export default function EntryPage() {
     const handleAddToList = () => {
         const item = selectedItemForAddition;
         if (!item) {
-            toast({
-                title: "Nenhum item selecionado",
-                description: "Por favor, busque e selecione um item da lista.",
-                variant: "destructive",
-            });
+            toast({ title: "Nenhum item selecionado", variant: "destructive" });
             return;
         };
         
         if (quantity <= 0) {
-            toast({
-                title: "Quantidade inválida",
-                description: "Por favor, insira uma quantidade maior que zero.",
-                variant: "destructive",
-            });
+            toast({ title: "Quantidade inválida", variant: "destructive" });
             return;
         }
 
         if (item.isPerishable === 'Sim' && !expirationDate) {
-            toast({
-                title: "Data de Validade obrigatória",
-                description: "Por favor, insira a data de validade para este item perecível.",
-                variant: "destructive",
-            });
+            toast({ title: "Data de Validade obrigatória", variant: "destructive" });
             return;
         }
 
@@ -108,10 +87,10 @@ export default function EntryPage() {
             if (existing) {
                 return prev.map(i => i.id === item.id ? { ...i, quantity: i.quantity + quantity } : i);
             }
-            return [...prev, { 
-                id: item.id, 
-                name: item.name, 
-                quantity, 
+            return [...prev, {
+                id: item.id,
+                name: item.name,
+                quantity,
                 unit: item.unit,
                 isPerishable: item.isPerishable,
                 expirationDate: item.isPerishable === 'Sim' ? expirationDate?.toISOString() : undefined
@@ -128,20 +107,17 @@ export default function EntryPage() {
     };
 
     const handleItemAdded = async (newItemData: any) => {
+        if (!secretariaId) return;
         setIsLoading(true);
         try {
             let imageUrl = "https://placehold.co/40x40.png";
-            if (newItemData.image) {
-                imageUrl = await uploadImage(newItemData.image);
-            }
+            if (newItemData.image) imageUrl = await uploadImage(newItemData.image);
 
-            const categoryPrefix = (newItemData.category === 'Outro' ? newItemData.otherCategory : newItemData.category).substring(0, 3).toUpperCase();
-            const namePrefix = newItemData.name.substring(0, 3).toUpperCase();
-            const codePrefix = `${categoryPrefix}-${namePrefix}`;
-            const generatedCode = await generateNextItemCode(codePrefix);
-            const finalCategory = newItemData.category === 'Outro' && newItemData.otherCategory ? newItemData.otherCategory : newItemData.category;
+            const category = newItemData.category === 'Outro' ? newItemData.otherCategory : newItemData.category;
+            const prefix = `${category.substring(0, 3).toUpperCase()}-${newItemData.name.substring(0, 3).toUpperCase()}`;
+            const generatedCode = await generateNextItemCode(secretariaId, prefix);
 
-            const newProductData: Omit<Product, 'id'> = {
+            const newProductData: Omit<Product, 'id' | 'secretariaId'> = {
                 name: newItemData.name,
                 name_lowercase: newItemData.name.toLowerCase(),
                 code: generatedCode,
@@ -149,19 +125,15 @@ export default function EntryPage() {
                 patrimony: newItemData.materialType === 'permanente' ? newItemData.patrimony : 'N/A',
                 type: newItemData.materialType,
                 quantity: 0, 
-                category: finalCategory,
+                category: category,
                 reference: newItemData.reference,
                 image: imageUrl,
                 isPerishable: newItemData.isPerishable,
                 expirationDate: newItemData.expirationDate,
             };
             
-            const newProductId = await addProduct(newProductData);
-            
-            toast({
-                title: "Item Adicionado!",
-                description: `${newProductData.name} foi adicionado ao inventário.`,
-            });
+            const newProductId = await addProduct(secretariaId, newProductData);
+            toast({ title: "Item Adicionado!", description: `${newProductData.name} foi adicionado ao inventário.` });
             
             if (newItemData.initialQuantity > 0) {
                 setReceivedItems(prev => [...prev, {
@@ -173,70 +145,54 @@ export default function EntryPage() {
                     expirationDate: newProductData.expirationDate,
                 }]);
             }
-        } catch (error) {
-                toast({
-                    title: "Erro ao Adicionar Item",
-                    description: "Não foi possível adicionar o novo item.",
-                    variant: "destructive",
-                });
-            } finally {
-                setIsLoading(false);
-                setIsAddItemSheetOpen(false);
-            }
-        };
+        } catch (error: any) { // <-- Erro tipado como any
+            toast({ title: "Erro ao Adicionar Item", description: error.message, variant: "destructive" });
+        } finally {
+            setIsLoading(false);
+            setIsAddItemSheetOpen(false);
+        }
+    };
 
     const handleFinalizeEntry = async () => {
-    if (receivedItems.length === 0 || !supplier || !responsible) {
-      toast({ title: "Campos obrigatórios", description: "Preencha a data, fornecedor/secretaria, responsável e adicione pelo menos um item.", variant: "destructive" });
-      return;
-    }
-    if (entryType === 'Oficial' && !invoice) {
-      toast({ title: "Campo obrigatório", description: "Para entradas oficiais, a nota fiscal é obrigatória.", variant: "destructive" });
-      return;
-    }
+        if (!secretariaId || !user) {
+            toast({ title: "Erro de autenticação", variant: "destructive" });
+            return;
+        }
+        if (receivedItems.length === 0 || !supplier || !responsible) {
+          toast({ title: "Campos obrigatórios", variant: "destructive" });
+          return;
+        }
+        if (entryType === 'Oficial' && !invoice) {
+          toast({ title: "Nota fiscal obrigatória para entrada oficial.", variant: "destructive" });
+          return;
+        }
 
-    for(const item of receivedItems) {
-      if (item.isPerishable === 'Sim' && !item.expirationDate) {
-         toast({ 
-            title: "Data de Validade pendente", 
-            description: `O item '${item.name}' é perecível e está sem data de validade.`, 
-            variant: "destructive" 
-         });
-         return;
-      }
-    }
+        setIsFinalizing(true);
+        try {
+            const entryPayload = {
+                items: receivedItems.map(({ id, quantity, expirationDate }) => ({ id, quantity, expirationDate })),
+                date: entryDate?.toISOString() || new Date().toISOString(),
+                supplier,
+                responsible: `Responsável:${responsible} Operador:${user.email || "Desconhecido"}`,
+                entryType,
+                invoice: entryType === 'Oficial' ? invoice : undefined,
+            };
 
-    setIsFinalizing(true);
-    try {
-        const entryPayload = {
-            items: receivedItems,
-            date: entryDate?.toISOString() || new Date().toISOString(),
-            supplier: supplier,
-            responsible: `Responsável:${responsible} Operador:${user?.email || "Desconhecido"}`,
-            entryType: entryType,
-            invoice: entryType === 'Oficial' ? invoice : undefined,
-        };
+            await finalizeEntry(secretariaId, entryPayload);
+            
+            toast({ title: "Entrada Registrada!", variant: "success" });
 
-        await finalizeEntry(entryPayload);
-        
-        toast({ title: "Entrada Registrada!", description: "A entrada de materiais foi registrada com sucesso.", variant: "success" });
-
-        setEntryDate(new Date());
-        setSupplier("");
-        setInvoice("");
-        setResponsible("");
-        setReceivedItems([]);
-        
-    } catch (error: any) {
-        toast({
-            title: "Erro ao Finalizar Entrada",
-            description: error.message || "Não foi possível registrar a entrada. Tente novamente.",
-            variant: "destructive"
-        });
-    } finally {
-        setIsFinalizing(false);
-    }
-};
+            setEntryDate(new Date());
+            setSupplier("");
+            setInvoice("");
+            setResponsible(user.name || "");
+            setReceivedItems([]);
+        } catch (error: any) { // <-- Erro tipado como any
+            toast({ title: "Erro ao Finalizar Entrada", description: error.message, variant: "destructive" });
+        } finally {
+            setIsFinalizing(false);
+        }
+    };
 
     return (
     <>

@@ -1,4 +1,3 @@
-
 "use client";
 
 import * as React from "react";
@@ -50,42 +49,28 @@ type ReturnedItem = {
 };
 
 export default function ReturnsPage() {
-    
+    // 1. Obter o secretariaId do contexto
+    const { user, secretariaId } = useAuth();
     const { toast } = useToast();
-    const [returnDate, setReturnDate] = React.useState<Date | undefined>(undefined);
+    
+    const [returnDate, setReturnDate] = React.useState<Date | undefined>(new Date());
     const [returningDepartment, setReturningDepartment] = React.useState("");
     const [returnReason, setReturnReason] = React.useState("");
     const [quantity, setQuantity] = React.useState(1);
     const [returnedItems, setReturnedItems] = React.useState<ReturnedItem[]>([]);
     const [selectedItem, setSelectedItem] = React.useState<Product | null>(null);
     const [isFinalizing, setIsFinalizing] = React.useState(false);
-    const [department, setDepartment] = React.useState("");
     const [otherReturnReason, setOtherReturnReason] = React.useState("");
-    const { user } = useAuth();
-
-    React.useEffect(() => {
-        setReturnDate(new Date());
-    }, []);
-
+    
     const handleAddToList = () => {
         if (!selectedItem) {
-             toast({
-                title: "Item não selecionado",
-                description: "Por favor, busque e selecione um item.",
-                variant: "destructive"
-            });
-            return;
+             toast({ title: "Item não selecionado", variant: "destructive" });
+             return;
         }
-
         if (quantity <= 0) {
-            toast({
-                title: "Quantidade inválida",
-                description: "Por favor, insira uma quantidade maior que zero.",
-                variant: "destructive",
-            });
+            toast({ title: "Quantidade inválida", variant: "destructive" });
             return;
         }
-
         setReturnedItems(prev => {
             const existing = prev.find(i => i.id === selectedItem.id);
             if (existing) {
@@ -93,7 +78,6 @@ export default function ReturnsPage() {
             }
             return [...prev, { id: selectedItem.id, name: selectedItem.name, quantity, unit: selectedItem.unit }];
         });
-
         setSelectedItem(null);
         setQuantity(1);
     };
@@ -103,50 +87,45 @@ export default function ReturnsPage() {
     };
 
     const handleFinalizeReturn = async () => {
-        if (returnedItems.length === 0) {
-            toast({
-                title: "Nenhum item adicionado",
-                description: "Adicione pelo menos um item para registrar a devolução.",
-                variant: "destructive"
-            });
+        // 2. Guarda de segurança
+        if (!user || !secretariaId) {
+            toast({ title: "Erro de Autenticação", description: "Usuário ou secretaria não identificados.", variant: "destructive" });
             return;
         }
 
-        if (!returningDepartment || !returnReason) {
-            toast({
-                title: "Campos obrigatórios",
-                description: "Por favor, preencha o setor e o motivo da devolução.",
-                variant: "destructive"
-            });
+        if (returnedItems.length === 0) {
+            toast({ title: "Nenhum item adicionado", variant: "destructive" });
+            return;
+        }
+        
+        const finalReason = returnReason === 'Outro' ? otherReturnReason : returnReason;
+        if (!returningDepartment || !finalReason) {
+            toast({ title: "Campos obrigatórios", description: "Por favor, preencha o setor e o motivo da devolução.", variant: "destructive" });
             return;
         }
 
         setIsFinalizing(true);
         try {
-            await finalizeReturn({
+            const returnData = {
                 items: returnedItems,
                 date: returnDate?.toISOString() || new Date().toISOString(),
                 department: returningDepartment,
-                reason: returnReason,
-                responsible: user?.email || "Desconhecido",
-            });
+                reason: finalReason,
+                responsible: user.name || user.email || "Desconhecido",
+            };
 
-            toast({
-                title: "Devolução Registrada!",
-                description: "A devolução de materiais foi registrada com sucesso.",
-                variant: "success"
-            });
+            // 3. Passar o secretariaId para a função
+            await finalizeReturn(secretariaId, returnData);
+
+            toast({ title: "Devolução Registrada!", variant: "success" });
 
             setReturnDate(new Date());
             setReturningDepartment("");
             setReturnReason("");
+            setOtherReturnReason("");
             setReturnedItems([]);
         } catch (error: any) {
-            toast({
-                title: "Erro ao Finalizar Devolução",
-                description: error.message || "Não foi possível registrar a devolução. Tente novamente.",
-                variant: "destructive"
-            });
+            toast({ title: "Erro ao Finalizar Devolução", description: error.message, variant: "destructive" });
         } finally {
             setIsFinalizing(false);
         }

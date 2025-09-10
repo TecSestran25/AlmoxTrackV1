@@ -24,15 +24,13 @@ import { useAuth } from "@/contexts/AuthContext";
 type RequestedItem = {
     id: string;
     name: string;
-    quantity: number; // A quantidade que o usuário quer
+    quantity: number;
     unit: string;
     isPerishable?: 'Sim' | 'Não';
     expirationDate?: string;
-    // 👇 Guarda uma "foto" do produto original no momento da adição
-    originalProduct: Product; 
+    originalProduct: Product;
 };
 
-// Componente Wrapper para Suspense, caso use useSearchParams
 export default function ConsumptionRequestPage() {
     return (
         <React.Suspense fallback={<div className="p-8 text-center">Carregando...</div>}>
@@ -45,7 +43,7 @@ function ConsumptionRequestForm() {
     const { toast } = useToast();
     const router = useRouter();
     const searchParams = useSearchParams();
-    const { user } = useAuth();
+    const { user, secretariaId } = useAuth(); // Obtenha o secretariaId
 
     // Estados do Formulário
     const [requestDate, setRequestDate] = React.useState<Date | undefined>(new Date());
@@ -78,7 +76,6 @@ function ConsumptionRequestForm() {
                 }
                 setDepartment(decodedData.department);
                 setPurpose(decodedData.purpose || '');
-                // Adapta os itens da URL para o novo formato com 'originalProduct'
                 setRequestedItems(decodedData.items.map((item: any) => ({...item, originalProduct: item})));
                 window.history.replaceState({}, document.title, window.location.pathname);
             } catch (error) {
@@ -130,45 +127,35 @@ function ConsumptionRequestForm() {
     };
 
     const handleEditClick = async (itemToEdit: RequestedItem) => {
+        if (!secretariaId) return; // Guarda de segurança
         toast({ title: "Carregando dados atualizados do item..." });
         try {
-            const liveProductData = await getProductById(itemToEdit.id);
+            // Passe o secretariaId para a função
+            const liveProductData = await getProductById(secretariaId, itemToEdit.id);
 
             if (!liveProductData) {
-                toast({
-                    title: "Erro ao carregar item",
-                    description: "Não foi possível encontrar os dados atualizados deste item no inventário.",
-                    variant: "destructive"
-                });
+                toast({ title: "Erro ao carregar item", variant: "destructive" });
                 return;
             }
             setSelectedItem(null);
             setSelectedItem(liveProductData);
             
             setQuantity(itemToEdit.quantity);
-
             handleRemoveItem(itemToEdit.id);
 
-            toast({
-                title: "Item pronto para edição",
-                description: `Ajuste a quantidade de "${itemToEdit.name}" e adicione novamente.`
-            });
+            toast({ title: "Item pronto para edição", description: `Ajuste a quantidade e adicione novamente.` });
 
         } catch (error) {
-            toast({
-                title: "Erro de Conexão",
-                description: "Não foi possível buscar os dados do item. Verifique sua conexão.",
-                variant: "destructive"
-            });
+            toast({ title: "Erro de Conexão", variant: "destructive" });
         }
     };
     
     const handleFinalizeIssue = async () => {
-        if (requestedItems.length === 0) {
-            toast({ title: "Nenhum item solicitado", variant: "destructive" });
+        if (!secretariaId || !user) {
+            toast({ title: "Erro de autenticação", variant: "destructive" });
             return;
         }
-        if (!requesterName || !department) {
+        if (requestedItems.length === 0 || !requesterName || !department) {
             toast({ title: "Campos obrigatórios", variant: "destructive" });
             return;
         }
@@ -181,10 +168,11 @@ function ConsumptionRequestForm() {
                 requester: requesterId ? `${requesterName} (${requesterId})` : requesterName,
                 department: department,
                 purpose: purpose,
-                responsible: user?.email || "Desconhecido",
+                responsible: user.email || "Desconhecido",
             };
 
-            await finalizeExit(exitData, requestId || undefined);
+            // Passe o secretariaId para a função
+            await finalizeExit(secretariaId, exitData, requestId || undefined);
             
             toast({ title: "Saída Registrada!", variant: "success" });
             
@@ -200,11 +188,7 @@ function ConsumptionRequestForm() {
             }
 
         } catch (error: any) {
-            toast({
-                title: "Erro ao Finalizar Saída",
-                description: error.message || "Não foi possível registrar a saída.",
-                variant: "destructive"
-            });
+            toast({ title: "Erro ao Finalizar Saída", description: error.message, variant: "destructive" });
         } finally {
             setIsFinalizing(false);
         }

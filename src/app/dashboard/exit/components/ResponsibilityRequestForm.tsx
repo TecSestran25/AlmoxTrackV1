@@ -9,44 +9,14 @@ import jsPDF from "jspdf";
 import autoTable from 'jspdf-autotable';
 
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from "@/components/ui/popover";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Textarea } from "@/components/ui/textarea";
-import {
-    AlertDialog,
-    AlertDialogAction,
-    AlertDialogCancel,
-    AlertDialogContent,
-    AlertDialogHeader,
-    AlertDialogTitle,
-    AlertDialogFooter,
-} from "@/components/ui/alert-dialog"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogFooter } from "@/components/ui/alert-dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
@@ -66,7 +36,9 @@ type RequestedItem = {
 
 export default function ResponsibilityRequestForm() {
     const { toast } = useToast();
-    const [responsibilityDate, setResponsibilityDate] = React.useState<Date | undefined>(undefined);
+    const { user, secretariaId } = useAuth(); // Obtenha o secretariaId
+
+    const [responsibilityDate, setResponsibilityDate] = React.useState<Date | undefined>(new Date());
     const [responsibleName, setResponsibleName] = React.useState("");
     const [responsibleId, setResponsibleId] = React.useState("");
     const [projectDescription, setProjectDescription] = React.useState("");
@@ -77,25 +49,18 @@ export default function ResponsibilityRequestForm() {
     const [isTermAccepted, setIsTermAccepted] = React.useState(false);
     const [isFinalizing, setIsFinalizing] = React.useState(false);
     const [department, setDepartment] = React.useState("");
-    const { user } = useAuth();
-
-    React.useEffect(() => {
-        setResponsibilityDate(new Date());
-    }, []);
 
     const handleAddItem = () => {
         if (!selectedItem) {
             toast({ title: "Erro", description: "Por favor, busque e selecione um item.", variant: "destructive" });
             return;
         }
-
         if (quantity <= 0) {
-            toast({ title: "Quantidade inválida", description: "A quantidade deve ser maior que zero.", variant: "destructive" });
+            toast({ title: "Quantidade inválida", variant: "destructive" });
             return;
         }
-
         if (selectedItem.quantity < quantity) {
-            toast({ title: "Estoque insuficiente", description: `A quantidade solicitada (${quantity}) é maior que a disponível (${selectedItem.quantity}).`, variant: "destructive" });
+            toast({ title: "Estoque insuficiente", variant: "destructive" });
             return;
         }
 
@@ -104,7 +69,7 @@ export default function ResponsibilityRequestForm() {
             if (existing) {
                 const newQuantity = existing.quantity + quantity;
                 if (selectedItem.quantity < newQuantity) {
-                    toast({ title: "Estoque insuficiente", description: `A quantidade total solicitada (${newQuantity}) é maior que a disponível (${selectedItem.quantity}).`, variant: "destructive" });
+                    toast({ title: "Estoque insuficiente", variant: "destructive" });
                     return prev;
                 }
                 return prev.map((i) => i.id === selectedItem.id ? { ...i, quantity: newQuantity } : i);
@@ -120,12 +85,8 @@ export default function ResponsibilityRequestForm() {
     };
     
     const handleFinalizeResponsibility = () => {
-        if (requestedItems.length === 0) {
-            toast({ title: "Nenhum item adicionado", description: "Adicione pelo menos um item para gerar o termo.", variant: "destructive" });
-            return;
-        }
-        if (!responsibleName || !responsibleId || !department) { 
-            toast({ title: "Campos obrigatórios", description: "Por favor, preencha o nome, matrícula e setor do responsável.", variant: "destructive" });
+        if (requestedItems.length === 0 || !responsibleName || !responsibleId || !department) {
+            toast({ title: "Campos obrigatórios", variant: "destructive" });
             return;
         }
         setIsTermAccepted(false);
@@ -199,25 +160,32 @@ export default function ResponsibilityRequestForm() {
     const handleActionAndFinalize = async (e: React.MouseEvent<HTMLButtonElement>) => {
         e.preventDefault();
         
+        if (!secretariaId || !user) { // Validação de segurança
+            toast({ title: "Erro de autenticação", variant: "destructive" });
+            return;
+        }
         if (!isTermAccepted) {
-            toast({ title: "Termo não aceito", description: "Você deve aceitar os termos para continuar.", variant: "destructive" });
+            toast({ title: "Termo não aceito", variant: "destructive" });
             return;
         }
 
         setIsFinalizing(true);
         try {
-            await finalizeExit({
+            const exitData = {
                 items: requestedItems,
                 date: responsibilityDate?.toISOString() || new Date().toISOString(),
                 requester: `${responsibleName} (${responsibleId})`,
                 department: department,
                 purpose: projectDescription,
-                responsible: `Responsável:${responsibleName} Operador:${user?.email || "Desconhecido"}`,
-            });
+                responsible: `Responsável:${responsibleName} Operador:${user.email || "Desconhecido"}`,
+            };
+
+            // Passe o secretariaId como primeiro argumento
+            await finalizeExit(secretariaId, exitData);
 
             generatePDF();
             
-            toast({ title: "Saída Registrada e PDF Gerado!", description: "O termo de responsabilidade foi gerado com sucesso.", variant: "success" });
+            toast({ title: "Saída Registrada e PDF Gerado!", variant: "success" });
 
             setIsConfirmDialogOpen(false);
             setResponsibilityDate(new Date());
@@ -228,11 +196,7 @@ export default function ResponsibilityRequestForm() {
             setRequestedItems([]);
 
         } catch (error: any) {
-            toast({
-                title: "Erro ao Finalizar Saída",
-                description: error.message || "Não foi possível registrar a saída. Tente novamente.",
-                variant: "destructive"
-            });
+            toast({ title: "Erro ao Finalizar Saída", description: error.message, variant: "destructive" });
         } finally {
             setIsFinalizing(false);
         }
