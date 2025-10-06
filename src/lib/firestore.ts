@@ -467,9 +467,23 @@ export const finalizeExit = async (secretariaId: string, exitData: ExitData, req
     if (!secretariaId) throw new Error("ID da secretaria é obrigatório.");
     try {
         await runTransaction(db, async (transaction) => {
+            // --- ETAPA 1: LEITURA DE TODOS OS DOCUMENTOS ---
+            // Primeiro, preparamos as referências de todos os produtos.
             const productRefs = exitData.items.map(item => doc(productsCollection, item.id));
+            
+            // Agora, fazemos a leitura de TODOS os documentos necessários no início.
             const productDocs = await Promise.all(productRefs.map(ref => transaction.get(ref)));
 
+            // **CORREÇÃO PRINCIPAL:** Se houver uma requisição, lemos ela AQUI, junto com os outros documentos.
+            let requestRef = null;
+            let requestDoc = null;
+            if (requestId) {
+                requestRef = doc(requestsCollection, requestId);
+                requestDoc = await transaction.get(requestRef); // Leitura da requisição movida para o início.
+            }
+
+            // --- ETAPA 2: VALIDAÇÃO DOS DADOS LIDOS ---
+            // Validamos os produtos.
             for (let i = 0; i < productDocs.length; i++) {
                 const productDoc = productDocs[i];
                 const item = exitData.items[i];
@@ -480,14 +494,21 @@ export const finalizeExit = async (secretariaId: string, exitData: ExitData, req
                     throw new Error(`Estoque insuficiente para ${productDoc.data().name}.`);
                 }
             }
+            // Validamos a requisição (se existir).
+            if (requestId && (!requestDoc || !requestDoc.exists() || requestDoc.data().secretariaId !== secretariaId)) {
+                throw new Error("Requisição não encontrada ou inválida.");
+            }
 
+            // --- ETAPA 3: EXECUÇÃO DE TODAS AS ESCRITAS ---
+            // Agora que todas as leituras e validações foram feitas, podemos começar a escrever.
             for (let i = 0; i < exitData.items.length; i++) {
                 const item = exitData.items[i];
-                // CORREÇÃO APLICADA AQUI
                 const productData = productDocs[i].data() as Product;
 
+                // Escrita 1: Atualiza o estoque do produto
                 transaction.update(productRefs[i], { quantity: increment(-item.quantity) });
 
+                // Escrita 2: Cria o registro de movimentação
                 const movementData: Omit<Movement, 'id'> = {
                     secretariaId,
                     productId: item.id,
@@ -496,21 +517,16 @@ export const finalizeExit = async (secretariaId: string, exitData: ExitData, req
                     quantity: item.quantity,
                     responsible: exitData.responsible,
                     department: exitData.department,
-                    productType: productData.type, // CORREÇÃO APLICADA AQUI
+                    productType: productData.type,
                     expirationDate: item.expirationDate || "",
                     requester: exitData.requester
                 };
-                
                 const movementRef = doc(movementsCollection);
                 transaction.set(movementRef, movementData);
             }
 
-            if (requestId) {
-                const requestRef = doc(requestsCollection, requestId);
-                const requestDoc = await transaction.get(requestRef);
-                if (!requestDoc.exists() || requestDoc.data().secretariaId !== secretariaId) {
-                   throw new Error("Requisição não encontrada ou inválida.");
-                }
+            // Escrita 3: Atualiza a requisição (se existir)
+            if (requestRef) { // Usamos a requestRef que já preparamos
                 transaction.update(requestRef, {
                     status: 'approved',
                     approvalDate: new Date().toISOString(),
@@ -518,10 +534,6 @@ export const finalizeExit = async (secretariaId: string, exitData: ExitData, req
                 });
             }
         });
-        
-        for (const item of exitData.items) {
-            await findAndSetNewExpirationDate(secretariaId, item.id);
-        }
 
     } catch (e) {
         console.error("Transação de saída falhou: ", e);
